@@ -19,6 +19,9 @@ from file_handler import (
     save_uploaded_file,
     build_encrypted_output_path,
     build_decrypted_output_path,
+    upload_encrypted_to_s3,
+    download_encrypted_from_s3,
+    delete_from_s3,
     remove_file_if_exists
 )
 
@@ -200,15 +203,10 @@ def dashboard():
     shared_files = db.get_shared_files(user_id)
     recent_logs = db.get_recent_logs(user_id, limit=3)
 
-    # Calculate real storage usage from actual file sizes on disk
-    total_bytes = 0
-    all_files = uploaded_files + shared_files
-    for f in all_files:
-        filepath = f['filepath']
-        if filepath and os.path.exists(filepath):
-            total_bytes += os.path.getsize(filepath)
-
-    used_mb = round(total_bytes / (1024 * 1024), 2)
+    # Storage usage: since files now live on S3, approximate from file count
+    # (actual byte tracking from S3 would require additional API calls)
+    total_files = len(uploaded_files) + len(shared_files)
+    used_mb = round(total_files * 2, 2)  # rough 2MB average per file estimate
     used_pct = min(round((used_mb / MAX_STORAGE_MB) * 100, 1), 100)
 
     return render_template(
@@ -247,25 +245,29 @@ def upload_file():
         # Step 2: generate integrity hash from original file
         file_hash = generate_hash(temp_input_path)
 
-        # Step 3: decide encrypted output path
+        # Step 3: decide local temp path for encryption output
         encrypted_output_path = build_encrypted_output_path(original_filename, ENCRYPTED_FOLDER)
 
-        # Step 4: encrypt file
+        # Step 4: encrypt file locally
         encrypt_file(temp_input_path, encrypted_output_path)
 
-        # Step 5: save metadata in database
+        # Step 5: upload encrypted file to AWS S3
+        s3_key = upload_encrypted_to_s3(encrypted_output_path, original_filename)
+
+        # Step 6: save S3 key as filepath in database
         file_id = db.store_file_metadata(
             session['user_id'],
             original_filename,
-            encrypted_output_path,
+            s3_key,
             file_hash
         )
 
-        # Step 6: log action
+        # Step 7: log action
         db.log_action(session['user_id'], f'upload:file_id={file_id}')
 
-        # Step 7: remove temporary plain file
+        # Step 8: remove all local temp files
         remove_file_if_exists(temp_input_path)
+        remove_file_if_exists(encrypted_output_path)
 
         flash('File uploaded and encrypted successfully!', 'success')
 
@@ -340,16 +342,17 @@ def share_file(file_id):
             continue
 
         if not db.is_file_already_shared(file_id, target_user['id']):
-            import shutil
-            new_filepath = build_encrypted_output_path(file_record['filename'], ENCRYPTED_FOLDER)
-            shutil.copy(file_record['filepath'], new_filepath)
-            
+            # Download original from S3 → re-upload a shared copy → store new S3 key
+            temp_shared_path = download_encrypted_from_s3(file_record['filepath'], ENCRYPTED_FOLDER)
+            new_s3_key = upload_encrypted_to_s3(temp_shared_path, file_record['filename'])
+            remove_file_if_exists(temp_shared_path)
+
             db.share_file_with_user(
                 shared_with_user_id=target_user['id'],
                 original_owner_id=session['user_id'],
                 original_file_id=file_id,
                 filename=file_record['filename'],
-                filepath=new_filepath,
+                filepath=new_s3_key,
                 file_hash=file_record['hash']
             )
             db.log_action(session['user_id'], f'share:file_id={file_id}:to_user={target_user["id"]}')
@@ -379,11 +382,7 @@ def unshare_file(shared_file_id):
     file_record = db.get_shared_file_by_id(shared_file_id)
     
     if file_record and file_record['shared_with_user_id'] == user_id:
-        try:
-            if os.path.exists(file_record['filepath']):
-                os.remove(file_record['filepath'])
-        except Exception:
-            pass
+        delete_from_s3(file_record['filepath'])
         db.remove_shared_access(shared_file_id, user_id)
         db.log_action(user_id, f'unshare:shared_file_id={shared_file_id}')
         flash('Removed file from your view successfully.', 'success')
@@ -406,12 +405,7 @@ def delete_file_route(file_id):
         flash('Cannot delete this file.', 'danger')
         return redirect(url_for('my_files'))
         
-    try:
-        if os.path.exists(file_record['filepath']):
-            os.remove(file_record['filepath'])
-    except Exception as e:
-        pass
-        
+    delete_from_s3(file_record['filepath'])
     db.delete_file(file_id, user_id)
     db.log_action(user_id, f'delete:file_id={file_id}')
     flash('File deleted successfully.', 'success')
@@ -437,19 +431,20 @@ def download_file(file_id):
         flash('Access denied.', 'danger')
         return redirect(url_for('dashboard'))
 
-    encrypted_path = file_record['filepath']
+    s3_key = file_record['filepath']
     original_filename = file_record['filename']
     original_hash = file_record['hash']
 
-    if not os.path.exists(encrypted_path):
-        flash('Stored file is missing.', 'danger')
-        return redirect(url_for('dashboard'))
-
     try:
+        # Step 1: Download encrypted file from S3 to local temp
+        local_encrypted = download_encrypted_from_s3(s3_key, ENCRYPTED_FOLDER)
+
+        # Step 2: Decrypt to a local temp path
         decrypted_output_path = build_decrypted_output_path(original_filename, TEMP_DECRYPTED_FOLDER)
+        decrypt_file(local_encrypted, decrypted_output_path)
+        remove_file_if_exists(local_encrypted)
 
-        decrypt_file(encrypted_path, decrypted_output_path)
-
+        # Step 3: Verify file integrity
         if not verify_hash(decrypted_output_path, original_hash):
             remove_file_if_exists(decrypted_output_path)
             flash('File integrity verification failed.', 'danger')
@@ -457,16 +452,13 @@ def download_file(file_id):
 
         db.log_action(user_id, f'download:file_id={file_id}')
 
-        # Read file into memory and clean up temp files
+        # Step 4: Read into memory, clean up, and send to user
         with open(decrypted_output_path, 'rb') as f:
             file_data = f.read()
 
-        # Clean up the temp UUID directory
         import shutil
-        temp_dir = os.path.dirname(decrypted_output_path)
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(os.path.dirname(decrypted_output_path), ignore_errors=True)
 
-        # Send response with explicit headers
         response = make_response(file_data)
         mime_type = mimetypes.guess_type(original_filename)[0] or 'application/octet-stream'
         response.headers.set('Content-Type', mime_type)
@@ -492,17 +484,20 @@ def download_shared_file(shared_file_id):
         flash('Access denied or file not found.', 'danger')
         return redirect(url_for('dashboard'))
 
-    encrypted_path = file_record['filepath']
+    s3_key = file_record['filepath']
     original_filename = file_record['filename']
     original_hash = file_record['hash']
 
-    if not os.path.exists(encrypted_path):
-        flash('Stored file is missing.', 'danger')
-        return redirect(url_for('dashboard'))
-
     try:
+        # Step 1: Download encrypted file from S3 to local temp
+        local_encrypted = download_encrypted_from_s3(s3_key, ENCRYPTED_FOLDER)
+
+        # Step 2: Decrypt to a local temp path
         decrypted_output_path = build_decrypted_output_path(original_filename, TEMP_DECRYPTED_FOLDER)
-        decrypt_file(encrypted_path, decrypted_output_path)
+        decrypt_file(local_encrypted, decrypted_output_path)
+        remove_file_if_exists(local_encrypted)
+
+        # Step 3: Verify integrity
         if not verify_hash(decrypted_output_path, original_hash):
             remove_file_if_exists(decrypted_output_path)
             flash('File integrity verification failed.', 'danger')
@@ -510,15 +505,13 @@ def download_shared_file(shared_file_id):
 
         db.log_action(user_id, f'download_shared:shared_file_id={shared_file_id}')
 
-        # Read file into memory and clean up temp files
+        # Step 4: Read into memory and send to user
         with open(decrypted_output_path, 'rb') as f:
             file_data = f.read()
 
         import shutil
-        temp_dir = os.path.dirname(decrypted_output_path)
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(os.path.dirname(decrypted_output_path), ignore_errors=True)
 
-        # Send response with explicit headers
         response = make_response(file_data)
         mime_type = mimetypes.guess_type(original_filename)[0] or 'application/octet-stream'
         response.headers.set('Content-Type', mime_type)

@@ -1,6 +1,15 @@
+import os
 from cryptography.fernet import Fernet
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def load_key():
+    # Try environment variable first (required for cloud deployment)
+    key = os.getenv('FERNET_KEY')
+    if key:
+        return key.encode()
+    # Fallback to local file for local development
     with open("secret.key", "rb") as f:
         return f.read()
 

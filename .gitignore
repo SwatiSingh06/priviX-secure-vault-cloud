@@ -2,10 +2,15 @@
 *.db
 *.db-journal
 
-# Encrypted files (user data)
+# Encryption key (NEVER push this to GitHub!)
+secret.key
+
+# Temp file folders
 encrypted_files/
 decrypted_files/
 uploaded_files/
+uploads/
+temp_decrypted/
 
 # Environment variables (secrets!)
 .env
