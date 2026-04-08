@@ -73,7 +73,6 @@ ENCRYPTED_FOLDER = os.path.join(BASE_DIR, "encrypted_files")
 TEMP_DECRYPTED_FOLDER = os.path.join(BASE_DIR, "temp_decrypted")
 
 ensure_directories(UPLOAD_FOLDER, ENCRYPTED_FOLDER, TEMP_DECRYPTED_FOLDER)
-db.init_db()
 
 
 @app.route('/')
@@ -523,9 +522,8 @@ def download_shared_file(shared_file_id):
         return redirect(url_for('dashboard'))
 
 
+db.init_db()
+
 if __name__ == '__main__':
-    db.init_db()
-    app.run(debug=True, port=5000)
-else:
-    # Called by gunicorn — ensure tables exist on cloud startup
-    db.init_db()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
