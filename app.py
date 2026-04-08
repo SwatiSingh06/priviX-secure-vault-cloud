@@ -524,4 +524,8 @@ def download_shared_file(shared_file_id):
 
 
 if __name__ == '__main__':
+    db.init_db()
     app.run(debug=True, port=5000)
+else:
+    # Called by gunicorn — ensure tables exist on cloud startup
+    db.init_db()
