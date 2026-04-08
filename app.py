@@ -32,13 +32,13 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'privix_secure_vault_secret_key_2026')
 
-# Session safety to prevent MismatchingStateError
-app.config['SESSION_COOKIE_NAME'] = 'privix_google_auth_session'
-app.config['SESSION_COOKIE_SAMESITE'] = 'None'
-app.config['SESSION_COOKIE_SECURE'] = True
+# Session safety to prevent MismatchingStateError behind proxy (like Render)
+app.config['SESSION_COOKIE_NAME'] = 'privix_session'
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Lax is required for OAuth redirect callbacks
 
+# Trust proxy headers so Flask knows it's being served over HTTPS
 from werkzeug.middleware.proxy_fix import ProxyFix
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 
 # Debug credentials loading (masked for privacy)
 client_id = os.getenv('GOOGLE_CLIENT_ID')
