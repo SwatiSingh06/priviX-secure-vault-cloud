@@ -34,11 +34,11 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'privix_secure_vault_secret_key_2
 
 # Session safety to prevent MismatchingStateError
 app.config['SESSION_COOKIE_NAME'] = 'privix_google_auth_session'
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'
+app.config['SESSION_COOKIE_SECURE'] = True
 
-# Allow HTTP for local development (Google requires this for redirect_uri)
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
-os.environ['AUTHLIB_INSECURE_TRANSPORT'] = 'true'
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 # Debug credentials loading (masked for privacy)
 client_id = os.getenv('GOOGLE_CLIENT_ID')
@@ -140,7 +140,7 @@ def logout():
 @app.route('/auth/google')
 def google_login():
     # Dynamic redirect URI based on how you access the site
-    redirect_uri = url_for('google_callback', _external=True)
+    redirect_uri = "https://privix-secure-vault-cloud.onrender.com/login/google/authorized"
     return google.authorize_redirect(redirect_uri)
 
 
