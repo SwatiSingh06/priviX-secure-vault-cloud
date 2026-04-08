@@ -38,11 +38,11 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Lax is required for OAuth redir
 
 # Trust proxy headers so Flask knows it's being served over HTTPS
 from werkzeug.middleware.proxy_fix import ProxyFix
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-# Debug credentials loading (masked for privacy)
-client_id = os.getenv('GOOGLE_CLIENT_ID')
-client_secret = os.getenv('GOOGLE_CLIENT_SECRET')
+# Debug credentials loading (scrubbed of any accidental spaces)
+client_id = os.getenv('GOOGLE_CLIENT_ID', '').replace(' ', '')
+client_secret = os.getenv('GOOGLE_CLIENT_SECRET', '').replace(' ', '')
 
 oauth = OAuth(app)
 google = oauth.register(
@@ -55,17 +55,27 @@ google = oauth.register(
 )
 
 @app.template_filter('format_ist_date')
-def format_ist_date_filter(utc_str):
-    if not utc_str:
+def format_ist_date_filter(utc_dt):
+    if not utc_dt:
         return ''
     try:
-        utc_dt = datetime.strptime(utc_str, '%Y-%m-%d %H:%M:%S')
-        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+        # Check if psycopg2 already returned a python datetime object
+        if isinstance(utc_dt, str):
+            # Parse strings whether they have microseconds or not
+            if '.' in utc_dt:
+                utc_dt = datetime.strptime(utc_dt, '%Y-%m-%d %H:%M:%S.%f')
+            else:
+                utc_dt = datetime.strptime(utc_dt, '%Y-%m-%d %H:%M:%S')
+                
+        # Ensure timezone is correctly set to UTC before converting to IST
+        if utc_dt.tzinfo is None:
+            utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+            
         ist_tz = timezone(timedelta(hours=5, minutes=30))
         ist_dt = utc_dt.astimezone(ist_tz)
         return ist_dt.strftime('%b %d, %Y')
-    except Exception:
-        return utc_str
+    except Exception as e:
+        return f"{utc_dt} [Error: {str(e)}]"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
@@ -138,53 +148,59 @@ def logout():
 
 @app.route('/auth/google')
 def google_login():
-    # Dynamic redirect URI based on how you access the site
-    redirect_uri = "https://privix-secure-vault-cloud.onrender.com/login/google/authorized"
-    return google.authorize_redirect(redirect_uri)
+    try:
+        redirect_uri = "https://privix-secure-vault-cloud.onrender.com/login/google/authorized"
+        return google.authorize_redirect(redirect_uri)
+    except Exception as e:
+        import traceback
+        return f"<h1>Google Login Route Error</h1><pre>{traceback.format_exc()}</pre>", 500
 
 
 @app.route('/login/google/authorized')
 def google_callback():
-    token = google.authorize_access_token()
-    userinfo = google.get('https://openidconnect.googleapis.com/v1/userinfo').json()
-    
-    email = userinfo.get('email')
-    google_id = userinfo.get('id') or userinfo.get('sub')
-    name = userinfo.get('name') or userinfo.get('given_name') or email.split('@')[0]
-    
-    user = db.get_user_by_google_id(google_id)
-    if not user:
-        # Check if user with this email exists (link if so)
-        existing_user = db.get_user_by_email(email)
-        if existing_user:
-            db.update_google_user_id(existing_user['id'], google_id)
-            user = db.get_user_by_id(existing_user['id'])
-            db.log_action(user['id'], 'link_google')
-        else:
-            # Create new user
-            user_id = db.create_google_user(name, email, google_id)
-            if not user_id:
-                # Fallback for username collisions
-                import random
-                name = f"{name}_{random.getrandbits(16)}"
-                user_id = db.create_google_user(name, email, google_id)
-            
-            if user_id:
-                user = db.get_user_by_id(user_id)
-                db.log_action(user_id, 'signup_google')
+    try:
+        # Pass the exact redirect URI to prevent proxy scheme mismatches at token exchange
+        token = google.authorize_access_token()
+        userinfo = google.get('https://openidconnect.googleapis.com/v1/userinfo').json()
+        
+        email = userinfo.get('email')
+        google_id = userinfo.get('id') or userinfo.get('sub')
+        name = userinfo.get('name') or userinfo.get('given_name') or email.split('@')[0]
+        
+        user = db.get_user_by_google_id(google_id)
+        if not user:
+            existing_user = db.get_user_by_email(email)
+            if existing_user:
+                db.update_google_user_id(existing_user['id'], google_id)
+                user = db.get_user_by_id(existing_user['id'])
+                db.log_action(user['id'], 'link_google')
             else:
-                flash('Authentication failed: Could not create user profile.', 'danger')
-                return redirect(url_for('login'))
-    
-    if user:
-        session['user_id'] = user['id']
-        session['username'] = user['username']
-        db.log_action(user['id'], 'login_google')
-        flash(f'Welcome back, {user["username"]}!', 'success')
-        return redirect(url_for('dashboard'))
-    else:
-        flash('Authentication failed: User record not found.', 'danger')
-        return redirect(url_for('login'))
+                user_id = db.create_google_user(name, email, google_id)
+                if not user_id:
+                    import random
+                    name = f"{name}_{random.getrandbits(16)}"
+                    user_id = db.create_google_user(name, email, google_id)
+                
+                if user_id:
+                    user = db.get_user_by_id(user_id)
+                    db.log_action(user_id, 'signup_google')
+                else:
+                    flash('Authentication failed: Could not create user profile.', 'danger')
+                    return redirect(url_for('login'))
+        
+        if user:
+            session['user_id'] = user['id']
+            session['username'] = user['username']
+            db.log_action(user['id'], 'login_google')
+            flash(f'Welcome back, {user["username"]}!', 'success')
+            return redirect(url_for('dashboard'))
+        else:
+            flash('Authentication failed: User record not found.', 'danger')
+            return redirect(url_for('login'))
+            
+    except Exception as e:
+        import traceback
+        return f"<h1>Google Callback Error</h1><pre>{traceback.format_exc()}</pre><br><p>Check if Client Secret, Client ID, and Database strings are correct.</p>", 500
 
 
 MAX_STORAGE_MB = 10240  # 10GB Per-user storage cap in MB
