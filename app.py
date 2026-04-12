@@ -1,6 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, session, send_file, after_this_request, make_response
 import mimetypes
-from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
 from urllib.parse import quote
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -34,25 +33,11 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'privix_secure_vault_secret_key_2
 
 # Session safety to prevent MismatchingStateError behind proxy (like Render)
 app.config['SESSION_COOKIE_NAME'] = 'privix_session'
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Lax is required for OAuth redirect callbacks
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # Trust proxy headers so Flask knows it's being served over HTTPS
 from werkzeug.middleware.proxy_fix import ProxyFix
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-
-# Debug credentials loading (scrubbed of any accidental spaces)
-client_id = os.getenv('GOOGLE_CLIENT_ID', '').replace(' ', '')
-client_secret = os.getenv('GOOGLE_CLIENT_SECRET', '').replace(' ', '')
-
-oauth = OAuth(app)
-google = oauth.register(
-    name='google',
-    client_id=client_id,
-    client_secret=client_secret,
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={'scope': 'openid email profile'},
-    issuer='https://accounts.google.com'
-)
 
 @app.template_filter('format_ist_date')
 def format_ist_date_filter(utc_dt):
@@ -144,63 +129,6 @@ def logout():
     session.clear()
     flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
-
-
-@app.route('/auth/google')
-def google_login():
-    try:
-        redirect_uri = "https://privix-secure-vault-cloud.onrender.com/login/google/authorized"
-        return google.authorize_redirect(redirect_uri)
-    except Exception as e:
-        import traceback
-        return f"<h1>Google Login Route Error</h1><pre>{traceback.format_exc()}</pre>", 500
-
-
-@app.route('/login/google/authorized')
-def google_callback():
-    try:
-        # Pass the exact redirect URI to prevent proxy scheme mismatches at token exchange
-        token = google.authorize_access_token()
-        userinfo = google.get('https://openidconnect.googleapis.com/v1/userinfo').json()
-        
-        email = userinfo.get('email')
-        google_id = userinfo.get('id') or userinfo.get('sub')
-        name = userinfo.get('name') or userinfo.get('given_name') or email.split('@')[0]
-        
-        user = db.get_user_by_google_id(google_id)
-        if not user:
-            existing_user = db.get_user_by_email(email)
-            if existing_user:
-                db.update_google_user_id(existing_user['id'], google_id)
-                user = db.get_user_by_id(existing_user['id'])
-                db.log_action(user['id'], 'link_google')
-            else:
-                user_id = db.create_google_user(name, email, google_id)
-                if not user_id:
-                    import random
-                    name = f"{name}_{random.getrandbits(16)}"
-                    user_id = db.create_google_user(name, email, google_id)
-                
-                if user_id:
-                    user = db.get_user_by_id(user_id)
-                    db.log_action(user_id, 'signup_google')
-                else:
-                    flash('Authentication failed: Could not create user profile.', 'danger')
-                    return redirect(url_for('login'))
-        
-        if user:
-            session['user_id'] = user['id']
-            session['username'] = user['username']
-            db.log_action(user['id'], 'login_google')
-            flash(f'Welcome back, {user["username"]}!', 'success')
-            return redirect(url_for('dashboard'))
-        else:
-            flash('Authentication failed: User record not found.', 'danger')
-            return redirect(url_for('login'))
-            
-    except Exception as e:
-        import traceback
-        return f"<h1>Google Callback Error</h1><pre>{traceback.format_exc()}</pre><br><p>Check if Client Secret, Client ID, and Database strings are correct.</p>", 500
 
 
 MAX_STORAGE_MB = 10240  # 10GB Per-user storage cap in MB

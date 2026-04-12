@@ -89,49 +89,6 @@ def get_user_by_username(username):
     conn.close()
     return dict(user) if user else None
 
-def get_user_by_google_id(google_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute("SELECT * FROM Users WHERE google_id = %s", (google_id,))
-    user = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return dict(user) if user else None
-
-def get_user_by_email(email):
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute("SELECT * FROM Users WHERE email = %s", (email,))
-    user = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return dict(user) if user else None
-
-def update_google_user_id(user_id, google_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE Users SET google_id = %s WHERE id = %s", (google_id, user_id))
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-def create_google_user(username, email, google_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "INSERT INTO Users (username, email, google_id, password_hash) VALUES (%s, %s, %s, NULL) RETURNING id",
-            (username, email, google_id)
-        )
-        user_id = cursor.fetchone()[0]
-        conn.commit()
-        return user_id
-    except UniqueViolation:
-        conn.rollback()
-        return None
-    finally:
-        cursor.close()
-        conn.close()
 
 def get_user_by_id(user_id):
     conn = get_db_connection()
