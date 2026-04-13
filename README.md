@@ -126,7 +126,7 @@ python app.py
 
 | Name | Roll Number |
 | :--- | :--- |
-| Shivansh Gupta | 2024BCS066 |
-| Shruti Gupta | 2024BCS068 |
-| Shlok Gupta | 2024BCS067 |
-| Atharva Sawant | 2024BCS064 |
+| Anvita Rayapati | 2024BCS-009 |
+| Pooja Luhar | 2024BCS-049 |
+| Sreeshma Nair | 2024BCS-073 |
+| Swati Singh | 2024BCS-075 |
