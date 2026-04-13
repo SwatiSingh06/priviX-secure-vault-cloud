@@ -22,7 +22,7 @@ Built with:
 
 ### 3. Granular Access Control
 * **Secure Authentication**: Built-in login mechanisms strictly segregate user accounts using hashed credentials (`werkzeug.security`).
-* **Asset Sharing Protocol**: Users can dynamically grant or revoke file access to specific usernames across the network. Only authorized users can ever download and decrypt shared assets.
+* **Asset Sharing Protocol**: Users can dynamically grant or revoke file access to specific usernames across the network. These usernames are unique to make sure the file is being transferred to the right person. Only authorized users can ever download and decrypt shared assets.
 
 ### 4. Real-Time Telemetry & Visualization
 * **Live Dashboard**: A beautiful, mobile-responsive interface showing overall data usage limits via dynamic donut charts, recent user activity logs, and system statuses.
