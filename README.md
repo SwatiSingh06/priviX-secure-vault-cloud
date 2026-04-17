@@ -27,7 +27,10 @@ Built with:
 ### 4. Real-Time Telemetry & Visualization
 * **Live Dashboard**: A beautiful, mobile-responsive interface showing overall data usage limits via dynamic donut charts, recent user activity logs, and system statuses.
 * **Animated Aesthetics**: Fluid particle-network background, modern glassmorphism UI components, and intuitive UX/UI flows.
-
+* 
+### 5. File Upload/Download Flow & API Layer
+* Secure File Flow: Upload → encryption → AWS S3 storage, and Download → access check → decryption → secure delivery.
+* API Layer: Built structured backend APIs to handle authentication, file upload, download, and secure sharing between frontend and backend systems.
 ---
 
 ## 🚀 Quick Start (Recommended)
