@@ -1,6 +1,6 @@
 # priviX - Secure Vault Cloud
 
-A full-stack, highly-secured file management network offering military-grade encrypted storage. 
+priviX is a secure and modern file management platform designed for safe storage and secure sharing of sensitive data. It uses strong encryption to protect user files and provides a clean, app-like interface for a smooth and intuitive experience. Users can securely upload, download, and share files across the network while maintaining data privacy and control.
 
 Built with:
 * **Fast Flask backend** (`app.py`, `file_handler.py`)
